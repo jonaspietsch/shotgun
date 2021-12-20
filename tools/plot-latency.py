@@ -80,35 +80,71 @@ def get_xy_from_histogram(latency_histogram):
 
 
 def merge_latency(data, since=0, until=float('+inf')):
-    """generate latency histogram for given period"""
-    # add 100ms tolarence for interval beginning / end
-    since_ms = data['stats_sum']['since_ms'] + since * 1000 - 100
-    until_ms = data['stats_sum']['since_ms'] + until * 1000 + 100
 
-    latency = []
-    requests = 0
-    start = None
-    end = None
-    for stats in data['stats_periodic']:
-        if stats['since_ms'] < since_ms:
-            continue
-        if stats['until_ms'] >= until_ms:
-            break
-        requests += stats['requests']
-        end = stats['until_ms']
+    if type(data) is dict:
+        """generate latency histogram for given period"""
+        # add 100ms tolarence for interval beginning / end
+        since_ms = data['stats_sum']['since_ms'] + since * 1000 - 100
+        until_ms = data['stats_sum']['since_ms'] + until * 1000 + 100
+
+        latency = []
+        requests = 0
+        start = None
+        end = None
+        for stats in data['stats_periodic']:
+            if stats['since_ms'] < since_ms:
+                continue
+            if stats['until_ms'] >= until_ms:
+                break
+            requests += stats['requests']
+            end = stats['until_ms']
+            if not latency:
+                latency = list(stats['latency'])
+                start = stats['since_ms']
+            else:
+                assert len(stats['latency']) == len(latency)
+                for i, _ in enumerate(stats['latency']):
+                    latency[i] += stats['latency'][i]
+
         if not latency:
-            latency = list(stats['latency'])
-            start = stats['since_ms']
-        else:
-            assert len(stats['latency']) == len(latency)
-            for i, _ in enumerate(stats['latency']):
-                latency[i] += stats['latency'][i]
+            raise RuntimeError('no samples matching this interval')
 
-    if not latency:
-        raise RuntimeError('no samples matching this interval')
+        qps = requests / (end - start) * 1000  # convert from ms
+        return latency, qps
 
-    qps = requests / (end - start) * 1000  # convert from ms
-    return latency, qps
+    else:
+        maxRange = 20000
+        latency = []
+        for i in range(0,maxRange + 1):
+            latency.append(0)
+        requests = 0
+        start = float('+inf')
+        end = float('-inf')
+        for meas in data:
+            requests += 1
+
+            begin = meas['Timestamp']['ClientUpstreamRequestTime']
+            fin = meas['Timestamp']['ClientDownstreamResponseTime']
+            measLatency = int((fin - begin) / 1000000)
+            
+            if begin < start:
+                start = begin
+            if begin > end:
+                end = begin
+            
+            #if not meas['Status']:
+            #    measLatency = maxRange
+            if measLatency < 0:
+                measLatency = maxRange
+            if measLatency > maxRange:
+                measLatency = maxRange
+            
+            #print(measLatency)
+            latency[measLatency] += 1
+
+        qps = requests / ((end - start)/1000000000)
+        #print(latency)
+        return latency, qps
 
 
 class NamedGroupAction(argparse.Action):
@@ -129,13 +165,13 @@ class NamedGroupAction(argparse.Action):
 def read_json(file_obj):
     data = json.load(file_obj)
 
-    try:
-        assert data['version'] == JSON_VERSION
-    except (KeyError, AssertionError):
-        logging.critical(
-            "Older formats of JSON data aren't supported. "
-            "Use older tooling or re-run the tests with newer shotgun.")
-        sys.exit(1)
+    #try:
+    #    assert data['version'] == JSON_VERSION
+    #except (KeyError, AssertionError):
+    #    logging.critical(
+    #        "Older formats of JSON data aren't supported. "
+    #        "Use older tooling or re-run the tests with newer shotgun.")
+    #    sys.exit(1)
 
     return data
 
